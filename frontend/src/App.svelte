@@ -69,10 +69,30 @@
 
     pc.ontrack = function (event) {
       console.log("Got a new track!", event)
-      let el = document.getElementById('remote') as HTMLVideoElement
+      /* let el = document.getElementById('remote') as HTMLVideoElement */
+      /* el.srcObject = event.streams[0] */
+      /* el.autoplay = true */
+      /* el.controls = true */
+
+      if (event.track.kind === 'audio') {
+        return
+      }
+
+      let el = document.createElement(event.track.kind) as HTMLVideoElement
       el.srcObject = event.streams[0]
       el.autoplay = true
       el.controls = true
+      document.getElementById('remoteVideos').appendChild(el)
+
+      event.track.onmute = function(event) {
+        el.play()
+      }
+
+      event.streams[0].onremovetrack = ({track}) => {
+        if (el.parentNode) {
+          el.parentNode.removeChild(el)
+        }
+      }
     }
 
     pc.oniceconnectionstatechange = e => console.log(pc.iceConnectionState)
@@ -98,13 +118,7 @@
     /*   }).catch(console.error) */
   }
 
-  //const start = async (sdp: string) => {
-    //try {
-      //await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(sdp)))
-    //} catch (e) {
-      //alert(e)
-    //}
-  //}
+  $: (window as any).pc = pc
 </script>
 
 <main>
@@ -118,8 +132,8 @@
 
   <h2>Local Video</h2>
   <video id="local" width="160" height="120" autoplay muted></video>
-  <h2>Remote Video</h2>
-  <video id="remote" width="160" height="120" autoplay muted></video>
+  <h2>Remote Videos</h2>
+  <div id="remoteVideos"></div> <br />
 
   <button class="createSessionButton" on:click={() => ""}> Publish a Broadcast </button>
 

@@ -1,10 +1,7 @@
 use anyhow::Result;
-use clap::{App, AppSettings, Arg};
 use sfu::signal::SocketMessage;
 use webrtc::ice_transport::ice_candidate::{RTCIceCandidate, RTCIceCandidateInit};
-use webrtc::peer_connection::sdp::sdp_type::RTCSdpType;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
-use std::io::Write;
 use std::sync::Arc;
 use tokio::time::Duration;
 use webrtc::api::API;
@@ -25,7 +22,6 @@ use webrtc::track::track_local::{TrackLocal, TrackLocalWriter};
 use webrtc::track::track_remote::TrackRemote;
 use webrtc::Error;
 use flume::Sender;
-use flume::Receiver;
 use std::collections::HashMap;
 
 mod sfu;
@@ -34,7 +30,6 @@ mod sfu;
 enum PeerChanCommand {
     NewOffer {
         uuid: String,
-        tx: Sender<SocketMessage>
     },
     AddIceCandidate {
         uuid: String,
@@ -47,11 +42,19 @@ enum PeerChanCommand {
     AddPeer {
         uuid: String,
         pc: Arc<RTCPeerConnection>,
+        tx: Sender<SocketMessage>
     },
     AddTrack {
         uuid: String,
         track: Arc<TrackLocalStaticRTP>
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct Peer {
+    pub pc: Arc<RTCPeerConnection>,
+    pub tx: Sender<SocketMessage>,
+    pub uuid: String,
 }
 
 #[tokio::main]
@@ -60,49 +63,51 @@ async fn main() -> Result<()> {
 
     let (peer_chan_tx, peer_chan_rx) = flume::unbounded::<PeerChanCommand>();
 
+    let peer_chan_inner_tx = peer_chan_tx.clone();
     tokio::spawn(async move {
-        // let mut pcs: Vec<Arc<RTCPeerConnection>> = vec![];
-        let mut pcs: HashMap<String, Arc<RTCPeerConnection>> = HashMap::new();
+        // let mut pcs: HashMap<String, Arc<RTCPeerConnection>> = HashMap::new();
+        let mut pcs: HashMap<String, Peer> = HashMap::new();
 
         while let Ok(cmd) = peer_chan_rx.recv_async().await {
             use PeerChanCommand::*;
 
             println!("👻👻👻👻");
             match cmd {
-                NewOffer { uuid, tx } => {
-                    println!("pcs: {:?}", pcs);
-                    println!("looking up: {:?}", uuid);
-                    if let Some(pc) = pcs.get(&uuid) {
-                        let clone = Arc::clone(&pc);
+                NewOffer { uuid } => {
+                    if let Some(peer) = pcs.get(&uuid) {
+                        let clone = Arc::clone(&peer.pc);
 
-                        let offer = clone.create_offer(None).await.unwrap();
+                        let offer: RTCSessionDescription = clone.create_offer(None).await.unwrap();
                         let offer_string = serde_json::to_string(&offer).unwrap();
                         clone.set_local_description(offer).await.unwrap();
 
-                        tx.send(sfu::signal::SocketMessage {
-                            event: String::from("offer"),
-                            data: offer_string,
-                            uuid: uuid.to_owned()
-                        }).unwrap();
+                        println!("");
+                        println!("whats this peer look like");
+                        for receiver in clone.get_receivers().await {
+                            println!("{:?}", receiver);
+                        }
+                        println!("");
+
+                        // tx.send(sfu::signal::SocketMessage {
+                        //     event: String::from("offer"),
+                        //     data: offer_string,
+                        //     uuid: uuid.to_owned()
+                        // }).unwrap();
                     }
                 }
                 AddIceCandidate { uuid, candidate } => {
-                    println!("pcs: {:?}", pcs);
-                    println!("looking up: {:?}", uuid);
-                    let pc = pcs.get(&uuid).unwrap();
-                    let clone = Arc::clone(&pc);
+                    let peer = pcs.get(&uuid).unwrap();
+                    let clone = Arc::clone(&peer.pc);
 
                     let can: RTCIceCandidateInit = serde_json::from_str(&candidate).unwrap();
                     println!("candidate: {:?}", can);
                     clone.add_ice_candidate(can).await.unwrap();
                 }
                 ReceiveAnswer { uuid, sdp } => {
-                    println!("pcs: {:?}", pcs);
-                    println!("looking up: {:?}", uuid);
-                    let pc = pcs.get(&uuid).unwrap();
-                    let clone = Arc::clone(&pc);
+                    let peer = pcs.get(&uuid).unwrap();
+                    let clone = Arc::clone(&peer.pc);
 
-                    println!("state: {:?}", pc.signaling_state());
+                    println!("state: {:?}", peer.pc.signaling_state());
 
                     let answer = RTCSessionDescription::answer(sdp).unwrap();
                     clone
@@ -110,34 +115,19 @@ async fn main() -> Result<()> {
                         .await
                         .unwrap();
                 },
-                AddPeer { uuid, pc } => {
-                    let clone = Arc::clone(&pc);
+                AddPeer { uuid, pc, tx } => {
                     println!("Got new pc in manager!");
-                    println!("senders: {:?}", pcs.len());
-
-                    // Push this answer to the other peers?
-                    // for peer in pcs {
-                    // }
-
-                    // cloned_signal_tx.send(sdp_offer);
-                    // println!("Sending signal answer back.");
-                    // socket_tx.send(sfu::signal::SocketMessage {
-                    //     event: String::from("offer"),
-                    //     data: sdp_answer.to_owned(),
-                    //     uuid: id.to_owned()
-                    // }).unwrap();
-
-                    pcs.insert(uuid, clone);
+                    let clone = Arc::clone(&pc);
+                    let id = uuid.clone();
+                    pcs.insert(uuid, Peer {
+                        pc: clone,
+                        uuid: id,
+                        tx
+                    });
                 },
                 AddTrack { uuid, track } => {
-                    // Loop through all peers and add this track?
-                    // let mut map: HashMap<i32, i32> = (0..8).map(|x| (x, x*10)).collect();
-                    // let a = map.iter().filter(|&(&key, &val)| key == 0).collect::<(i32, i32)>();
-                    // let other_peers = pcs.clone().retain(|&k, _| k != uuid);
-
-                    // let other_peers = pcs.clone().iter().filter(|&k, v| k != uuid);
-
-                    for (key, pc) in &pcs {
+                    for (key, peer) in &pcs {
+                        let pc = &peer.pc;
                         if key == uuid.as_str() {
                             continue;
                         } else {
@@ -147,9 +137,10 @@ async fn main() -> Result<()> {
                                 .await
                                 .unwrap();
 
-                            // println!("rtp_transceiver: {:?}", pc.get_transceivers());
-                            // println!("senders: {:?}", pc.get_senders());
-                            // println!("receivers: {:?}", pc.get_receivers());
+                            let clone_of_tx = peer_chan_inner_tx.clone();
+                            peer_chan_inner_tx.send(PeerChanCommand::NewOffer {
+                                uuid: uuid.to_owned()
+                            }).unwrap();
                         }
                     }
                 },
@@ -195,19 +186,12 @@ async fn main() -> Result<()> {
 
                 cloned_peer_chan_2_tx.send(PeerChanCommand::NewOffer {
                     uuid: cloned_id_3.to_owned(),
-                    tx: cloned_socket_again_tx.clone()
                 }).unwrap();
 
                 Box::pin(async {})
             }))
         .await;
 
-
-        // let local_track = Arc::new(TrackLocalStaticRTP::new(
-        //         track.codec().await.capability,
-        //         "video".to_owned(),
-        //         "webrtc-rs".to_owned(),
-        // ));
         let track_a = Arc::new(TrackLocalStaticSample::new(
                 RTCRtpCodecCapability {
                     mime_type: MIME_TYPE_VP8.to_owned(),
@@ -242,7 +226,8 @@ async fn main() -> Result<()> {
 
         peer_chan_tx.send(PeerChanCommand::AddPeer {
             uuid: id.to_owned(),
-            pc: peer_connection
+            pc: peer_connection,
+            tx: cloned_socket_again_tx.clone()
         }).unwrap();
 
         tokio::spawn(async move {
@@ -250,19 +235,6 @@ async fn main() -> Result<()> {
                 match signal {
                     sfu::signal::SocketMessage { event, uuid: id, data: sdp } if event == "answer" => {
                         println!("Got an answer back");
-                        // let cloned_again_peer_chan_tx = cloned_peer_chan_tx.clone();
-                        // let (peer_connection, id, sdp_answer) = create_peer(sdp, id, cloned_again_peer_chan_tx).await.unwrap();
-                        // println!("Sending signal answer back.");
-                        // socket_tx.send(sfu::signal::SocketMessage {
-                        //     event: String::from("offer"),
-                        //     data: sdp_answer.to_owned(),
-                        //     uuid: id.to_owned()
-                        // }).unwrap();
-
-                        // let answer = RTCSessionDescription { sdp_type: RTCSdpType::Answer, sdp: sdp };
-
-
-                        // println!("Adding channel.");
                         cloned_again_peer_chan_tx.send(PeerChanCommand::ReceiveAnswer {
                             uuid: id.to_owned(),
                             sdp
@@ -301,7 +273,7 @@ async fn create_peer(uuid: String, peer_chan_tx: Sender<PeerChanCommand>) -> Res
     peer_connection
         .on_track(Box::new(
                 move |track: Option<Arc<TrackRemote>>, _receiver: Option<Arc<RTCRtpReceiver>>| {
-                    println!("Received a new track!!!");
+                    println!("✨✨✨✨✨✨✨✨✨✨✨✨✨✨✨✨✨✨✨✨✨✨✨✨✨✨✨✨ Received a new track!!!");
 
                     if let Some(track) = track {
                         // Send a PLI on an interval so that the publisher is pushing a keyframe every rtcpPLIInterval
@@ -352,6 +324,7 @@ async fn create_peer(uuid: String, peer_chan_tx: Sender<PeerChanCommand>) -> Res
                             // Read RTP packets being sent to webrtc-rs
                             while let Ok((rtp, _)) = track.read_rtp().await {
                                 if let Err(err) = local_track.write_rtp(&rtp).await {
+                                    println!("wrote packet");
                                     if Error::ErrClosedPipe != err {
                                         print!("output track write_rtp got error: {} and break", err);
                                         break;
