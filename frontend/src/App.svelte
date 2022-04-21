@@ -2,10 +2,15 @@
   import { onMount } from 'svelte'
 
   let pc: RTCPeerConnection
-  let ws = new WebSocket("ws://localhost:8081")
+  let ws: WebSocket
+  let uuid: string
 
-  onMount(() => {
-    createPeerConnection()
+  onMount(async () => {
+    console.log('creating peer')
+    await createPeerConnection()
+    console.log('...done!')
+
+    ws = new WebSocket("ws://localhost:8081")
 
     ws.onopen = e => {
       console.log("[open] Connection established")
@@ -17,17 +22,16 @@
 
       switch (msg.event) {
         case 'offer':
+          uuid = msg.uuid
           let offer = JSON.parse(msg.data)
           if (!offer) {
             return console.log('failed to parse answer')
           }
           console.log("Got this offer:")
           console.log(offer)
-          await pc.setRemoteDescription(new RTCSessionDescription(offer))
-          //pc.createAnswer().then(answer => {
-            //pc.setLocalDescription(answer)
-            //ws.send(JSON.stringify({event: 'answer', data: JSON.stringify(answer)}))
-          //})
+
+          console.log(pc.getSenders())
+          await pc.setRemoteDescription(offer)
 
           const answer = await pc.createAnswer()
           console.log('Sending answer.', answer)
@@ -54,13 +58,13 @@
     }
   })
 
-  const createPeerConnection = () => {
+  const createPeerConnection = async () => {
     pc = new RTCPeerConnection({
-      //iceServers: [
-        //{
-          //urls: 'stun:stun.l.google.com:19302'
-        //}
-      //]
+      iceServers: [
+        {
+          urls: 'stun:stun.l.google.com:19302'
+        }
+      ]
     })
 
     pc.ontrack = function (event) {
@@ -78,27 +82,20 @@
         return
       }
 
-      ws.send(JSON.stringify({event: 'candidate', data: JSON.stringify(e.candidate)}))
+      ws.send(JSON.stringify({event: 'candidate', uuid, data: JSON.stringify(e.candidate)}))
     }
 
-    //pc.onicecandidate = event => {
-      //if (event.candidate === null) {
-        //let sdp = JSON.stringify(pc.localDescription)
-        //console.log("Sending local sdp")
-        ////ws.send(JSON.stringify({
-          ////event: "answer",
-          ////data: sdp,
-          ////uuid: "whatever"
-        ////}))
-      //}
-    //}
+    let stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+    let el = document.getElementById('local') as HTMLVideoElement
+    el.srcObject = stream
 
-    navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-      .then(stream => {
-        stream.getTracks().forEach(track => pc.addTrack(track, stream));
-        let el = document.getElementById('local') as HTMLVideoElement
-        el.srcObject = stream
-      }).catch(console.error)
+    /* navigator.mediaDevices.getUserMedia({ video: true, audio: false }) */
+    /*   .then(stream => { */
+    /*     stream.getTracks().forEach(track => pc.addTrack(track, stream)); */
+    /*     let el = document.getElementById('local') as HTMLVideoElement */
+    /*     el.srcObject = stream */
+    /*   }).catch(console.error) */
   }
 
   //const start = async (sdp: string) => {

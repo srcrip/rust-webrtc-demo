@@ -1,13 +1,15 @@
 use anyhow::Result;
 use clap::{App, AppSettings, Arg};
+use sfu::signal::SocketMessage;
 use webrtc::ice_transport::ice_candidate::{RTCIceCandidate, RTCIceCandidateInit};
 use webrtc::peer_connection::sdp::sdp_type::RTCSdpType;
+use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use std::io::Write;
 use std::sync::Arc;
 use tokio::time::Duration;
 use webrtc::api::API;
 use webrtc::api::interceptor_registry::register_default_interceptors;
-use webrtc::api::media_engine::MediaEngine;
+use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_VP8};
 use webrtc::api::APIBuilder;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
@@ -16,7 +18,7 @@ use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
-use webrtc::rtp_transceiver::rtp_codec::RTPCodecType;
+use webrtc::rtp_transceiver::rtp_codec::{RTPCodecType, RTCRtpCodecCapability};
 use webrtc::rtp_transceiver::rtp_receiver::RTCRtpReceiver;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::{TrackLocal, TrackLocalWriter};
@@ -30,6 +32,10 @@ mod sfu;
 
 #[derive(Debug, Clone)]
 enum PeerChanCommand {
+    NewOffer {
+        uuid: String,
+        tx: Sender<SocketMessage>
+    },
     AddIceCandidate {
         uuid: String,
         candidate: String,
@@ -63,6 +69,23 @@ async fn main() -> Result<()> {
 
             println!("👻👻👻👻");
             match cmd {
+                NewOffer { uuid, tx } => {
+                    println!("pcs: {:?}", pcs);
+                    println!("looking up: {:?}", uuid);
+                    if let Some(pc) = pcs.get(&uuid) {
+                        let clone = Arc::clone(&pc);
+
+                        let offer = clone.create_offer(None).await.unwrap();
+                        let offer_string = serde_json::to_string(&offer).unwrap();
+                        clone.set_local_description(offer).await.unwrap();
+
+                        tx.send(sfu::signal::SocketMessage {
+                            event: String::from("offer"),
+                            data: offer_string,
+                            uuid: uuid.to_owned()
+                        }).unwrap();
+                    }
+                }
                 AddIceCandidate { uuid, candidate } => {
                     println!("pcs: {:?}", pcs);
                     println!("looking up: {:?}", uuid);
@@ -71,7 +94,7 @@ async fn main() -> Result<()> {
 
                     let can: RTCIceCandidateInit = serde_json::from_str(&candidate).unwrap();
                     println!("candidate: {:?}", can);
-                    // clone.add_ice_candidate(can).await.unwrap();
+                    clone.add_ice_candidate(can).await.unwrap();
                 }
                 ReceiveAnswer { uuid, sdp } => {
                     println!("pcs: {:?}", pcs);
@@ -139,11 +162,15 @@ async fn main() -> Result<()> {
         // offer. This way the SFU only takes in answers, and sends out offers. Guess that doesn't
         // work if they change tracks but it's a start.
         let cloned_peer_chan_tx = peer_chan_tx.clone();
+        let cloned_peer_chan_2_tx = peer_chan_tx.clone();
         let cloned_again_peer_chan_tx = cloned_peer_chan_tx.clone();
         let (peer_connection, id) = create_peer(uuid.to_owned(), cloned_peer_chan_tx).await.unwrap();
 
         let cloned_id_again = uuid.clone();
+        let cloned_id_2 = uuid.clone();
+        let cloned_id_3 = uuid.clone();
         let cloned_socket_tx = socket_tx.clone();
+        let cloned_socket_again_tx = socket_tx.clone();
         peer_connection
             .on_ice_candidate(Box::new(move |candidate: Option<RTCIceCandidate>| {
                 let cloned_2_socket_tx = socket_tx.clone();
@@ -160,6 +187,40 @@ async fn main() -> Result<()> {
                 })
             })).await;
 
+        // Set the handler for when renegotiation needs to happen
+        peer_connection
+            .on_negotiation_needed(Box::new(move || {
+                println!("Peer Connection needs negotiation.");
+                // let cloned_2_socket_tx = socket_tx.clone();
+
+                cloned_peer_chan_2_tx.send(PeerChanCommand::NewOffer {
+                    uuid: cloned_id_3.to_owned(),
+                    tx: cloned_socket_again_tx.clone()
+                }).unwrap();
+
+                Box::pin(async {})
+            }))
+        .await;
+
+
+        // let local_track = Arc::new(TrackLocalStaticRTP::new(
+        //         track.codec().await.capability,
+        //         "video".to_owned(),
+        //         "webrtc-rs".to_owned(),
+        // ));
+        let track_a = Arc::new(TrackLocalStaticSample::new(
+                RTCRtpCodecCapability {
+                    mime_type: MIME_TYPE_VP8.to_owned(),
+                    ..Default::default()
+                },
+                "video".to_owned(),
+                "webrtc-rs".to_owned(),
+        ));
+
+        let _rtp_sender = peer_connection
+            .add_track(Arc::clone(&track_a) as Arc<dyn TrackLocal + Send + Sync>)
+            .await
+            .unwrap();
 
         let offer = peer_connection.create_offer(None).await?;
         let offer_string = serde_json::to_string(&offer)?;
@@ -324,14 +385,6 @@ async fn handle_pc(peer_connection: &Arc<RTCPeerConnection>) -> Result<(), anyho
 
     println!("are we 1");
 
-    // Set the handler for when renegotiation needs to happen
-    peer_connection
-        .on_negotiation_needed(Box::new(move || {
-            println!("Peer Connection needs negotiation.");
-            Box::pin(async {})
-        }))
-    .await;
-
     // // Set the remote SessionDescription
     // peer_connection
     //     .set_remote_description(offer)
@@ -401,4 +454,8 @@ fn prepare_configuration() -> Result<RTCConfiguration, anyhow::Error> {
     };
 
     Ok(config)
+}
+
+// Loop through all the PCs and 
+fn signal_peer_connections(pcs: HashMap<String, Arc<RTCPeerConnection>>) {
 }
