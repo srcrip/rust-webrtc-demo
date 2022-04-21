@@ -15,7 +15,7 @@ use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
-use webrtc::rtp_transceiver::rtp_codec::{RTPCodecType, RTCRtpCodecCapability};
+use webrtc::rtp_transceiver::rtp_codec::{RTPCodecType, RTCRtpCodecCapability, RTCRtpCodecParameters};
 use webrtc::rtp_transceiver::rtp_receiver::RTCRtpReceiver;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::{TrackLocal, TrackLocalWriter};
@@ -145,10 +145,22 @@ async fn main() -> Result<()> {
                             continue;
                         } else {
                             println!("Adding track to this pc.");
-                            let _rtp_sender = pc
+                            let rtp_sender = pc
                                 .add_track(Arc::clone(&track) as Arc<dyn TrackLocal + Send + Sync>)
                                 .await
                                 .unwrap();
+
+                            // Read incoming RTCP packets
+                            // Before these packets are returned they are processed by interceptors. For things
+                            // like NACK this needs to be called.
+                            tokio::spawn(async move {
+                                let mut rtcp_buf = vec![0u8; 1500];
+                                // while let Ok((_, _)) = rtp_sender.read(&mut rtcp_buf).await {}
+                                while let Ok((_, _)) = rtp_sender.read(&mut rtcp_buf).await {
+                                    // println!("Listening");
+                                }
+                                Result::<()>::Ok(())
+                            });
 
                             // println!("rtp_transceiver: {:?}", pc.get_transceivers());
                             // println!("senders: {:?}", pc.get_senders());
@@ -220,10 +232,19 @@ async fn main() -> Result<()> {
                 "webrtc-rs".to_owned(),
         ));
 
-        let _rtp_sender = peer_connection
+        let rtp_sender = peer_connection
             .add_track(Arc::clone(&track_a) as Arc<dyn TrackLocal + Send + Sync>)
             .await
             .unwrap();
+
+        tokio::spawn(async move {
+            let mut rtcp_buf = vec![0u8; 1500];
+            // while let Ok((_, _)) = rtp_sender.read(&mut rtcp_buf).await {}
+            while let Ok((_, _)) = rtp_sender.read(&mut rtcp_buf).await {
+                // println!("Listening to a");
+            }
+            Result::<()>::Ok(())
+        });
 
         let offer = peer_connection.create_offer(None).await?;
         let offer_string = serde_json::to_string(&offer)?;
@@ -427,6 +448,20 @@ fn prepare_api() -> Result<API, anyhow::Error> {
     let mut m = MediaEngine::default();
 
     m.register_default_codecs()?;
+    // m.register_codec(
+    //     RTCRtpCodecParameters {
+    //         capability: RTCRtpCodecCapability {
+    //             mime_type: MIME_TYPE_VP8.to_owned(),
+    //             clock_rate: 90000,
+    //             channels: 0,
+    //             sdp_fmtp_line: "".to_owned(),
+    //             rtcp_feedback: vec![],
+    //         },
+    //         payload_type: 96,
+    //         ..Default::default()
+    //     },
+    //     RTPCodecType::Video,
+    // )?;
 
     // Create a InterceptorRegistry. This is the user configurable RTP/RTCP Pipeline.
     // This provides NACKs, RTCP Reports and other features. If you use `webrtc.NewPeerConnection`

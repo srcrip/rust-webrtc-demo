@@ -27,14 +27,13 @@
           if (!offer) {
             return console.log('failed to parse answer')
           }
-          console.log("Got this offer:")
-          console.log(offer)
+          console.warn("Got this offer:", offer)
 
           console.log(pc.getSenders())
           await pc.setRemoteDescription(offer)
 
           const answer = await pc.createAnswer()
-          console.log('Sending answer.', answer)
+          console.warn('Sending answer.', answer)
           await pc.setLocalDescription(answer)
 
           ws.send(JSON.stringify({
@@ -59,6 +58,8 @@
   })
 
   const createPeerConnection = async () => {
+    let stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+
     pc = new RTCPeerConnection({
       iceServers: [
         {
@@ -105,7 +106,6 @@
       ws.send(JSON.stringify({event: 'candidate', uuid, data: JSON.stringify(e.candidate)}))
     }
 
-    let stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
     stream.getTracks().forEach(track => pc.addTrack(track, stream));
     let el = document.getElementById('local') as HTMLVideoElement
     el.srcObject = stream
