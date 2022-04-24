@@ -28,7 +28,6 @@ pub struct SocketMessage {
     pub uuid: String,
 }
 
-
 type Connection = (String, Sender<SocketMessage>, Receiver<SocketMessage>);
 
 pub async fn ws_sdp_signaler(port: u16) -> Receiver<Connection> {
@@ -118,7 +117,7 @@ async fn serve_websocket(
         println!("Received incoming ws message: {:?}", message);
         match message? {
             Message::Text(msg) => {
-                println!("Receiving msg for uuid: {:?}", uuid);
+                // println!("Receiving msg: {:?}, for uuid: {:?}", msg, uuid);
                 in_tx.send(serde_json::from_str(&msg).unwrap()).unwrap();
             }
             Message::Close(msg) => {

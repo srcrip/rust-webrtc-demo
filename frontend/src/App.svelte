@@ -5,7 +5,15 @@
   let ws: WebSocket
   let uuid: string
 
+  function randomId() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+      let r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8)
+      return v.toString(16)
+    })
+  }
+
   onMount(async () => {
+    uuid = randomId()
     console.log('creating peer')
     await createPeerConnection()
     console.log('...done!')
@@ -20,13 +28,21 @@
       console.log(`[message] Data received from server: ${event.data}`)
       let msg = JSON.parse(event.data)
 
+      /* let offerIn, answerIn */
+
       switch (msg.event) {
+        case 'answer':
+          let answerIn = JSON.parse(msg.data)
+          if (!answerIn) { return console.log('failed to parse offer') }
+
+          await pc.setRemoteDescription(answerIn)
+
+          return
         case 'offer':
-          uuid = msg.uuid
+          //uuid = msg.uuid
           let offer = JSON.parse(msg.data)
-          if (!offer) {
-            return console.log('failed to parse answer')
-          }
+          if (!offer) { return console.log('failed to parse offer') }
+
           console.warn("Got this offer:", offer)
 
           console.log(pc.getSenders())
@@ -44,21 +60,34 @@
 
           return
 
-          case 'candidate':
-            console.log("candidate isssssssss:")
-            console.log(msg)
-            let candidate = JSON.parse(msg.data)
-            if (!candidate) {
-              return console.log('failed to parse candidate')
-            }
+        case 'candidate':
+          console.log("candidate isssssssss:")
+          console.log(msg)
+          let candidate = JSON.parse(msg.data)
+          if (!candidate) {
+            return console.log('failed to parse candidate')
+          }
 
-            pc.addIceCandidate(candidate)
+          pc.addIceCandidate(candidate)
         }
     }
+
+    connect()
   })
 
+  const connect = async () => {
+    const offer = await pc.createOffer()
+    await pc.setLocalDescription(offer)
+
+    ws.send(JSON.stringify({
+      event: "offer",
+      data: offer.sdp,
+      uuid: uuid
+    }))
+  }
+
   const createPeerConnection = async () => {
-    let stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+    let stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
 
     pc = new RTCPeerConnection({
       iceServers: [
@@ -96,7 +125,7 @@
       }
     }
 
-    pc.oniceconnectionstatechange = e => console.log(pc.iceConnectionState)
+    pc.oniceconnectionstatechange = e => console.warn(pc.iceConnectionState)
 
     pc.onicecandidate = e => {
       if (!e.candidate) {
