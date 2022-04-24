@@ -14,43 +14,40 @@
 
   onMount(async () => {
     uuid = randomId()
-    console.log('creating peer')
-    await createPeerConnection()
-    console.log('...done!')
 
     ws = new WebSocket("ws://localhost:8081")
 
-    ws.onopen = e => {
-      console.log("[open] Connection established")
+    ws.onopen = async _e => {
+      console.log("Connection established. Creating peer.")
+      await createPeerConnection()
+      connect()
     }
 
     ws.onmessage = async (event) => {
       console.log(`[message] Data received from server: ${event.data}`)
       let msg = JSON.parse(event.data)
 
-      /* let offerIn, answerIn */
-
       switch (msg.event) {
-        case 'answer':
-          let answerIn = JSON.parse(msg.data)
-          if (!answerIn) { return console.log('failed to parse offer') }
+        case 'answer': {
+          let answer = JSON.parse(msg.data)
+          if (!answer) { return console.log('failed to parse offer') }
 
-          await pc.setRemoteDescription(answerIn)
+          await pc.setRemoteDescription(answer).then(() => pc = pc)
 
           return
-        case 'offer':
-          //uuid = msg.uuid
+        }
+        case 'offer': {
           let offer = JSON.parse(msg.data)
           if (!offer) { return console.log('failed to parse offer') }
 
           console.warn("Got this offer:", offer)
 
           console.log(pc.getSenders())
-          await pc.setRemoteDescription(offer)
+          await pc.setRemoteDescription(offer).then(() => pc = pc)
 
           const answer = await pc.createAnswer()
           console.warn('Sending answer.', answer)
-          await pc.setLocalDescription(answer)
+          await pc.setLocalDescription(answer).then(() => pc = pc)
 
           ws.send(JSON.stringify({
             event: "answer",
@@ -59,10 +56,8 @@
           }))
 
           return
-
-        case 'candidate':
-          console.log("candidate isssssssss:")
-          console.log(msg)
+        }
+        case 'candidate': {
           let candidate = JSON.parse(msg.data)
           if (!candidate) {
             return console.log('failed to parse candidate')
@@ -70,14 +65,13 @@
 
           pc.addIceCandidate(candidate)
         }
+      }
     }
-
-    connect()
   })
 
   const connect = async () => {
     const offer = await pc.createOffer()
-    await pc.setLocalDescription(offer)
+    await pc.setLocalDescription(offer).then(() => pc = pc)
 
     ws.send(JSON.stringify({
       event: "offer",
@@ -99,10 +93,6 @@
 
     pc.ontrack = function (event) {
       console.log("Got a new track!", event)
-      /* let el = document.getElementById('remote') as HTMLVideoElement */
-      /* el.srcObject = event.streams[0] */
-      /* el.autoplay = true */
-      /* el.controls = true */
 
       if (event.track.kind === 'audio') {
         return
@@ -138,19 +128,13 @@
     stream.getTracks().forEach(track => pc.addTrack(track, stream));
     let el = document.getElementById('local') as HTMLVideoElement
     el.srcObject = stream
-
-    /* navigator.mediaDevices.getUserMedia({ video: true, audio: false }) */
-    /*   .then(stream => { */
-    /*     stream.getTracks().forEach(track => pc.addTrack(track, stream)); */
-    /*     let el = document.getElementById('local') as HTMLVideoElement */
-    /*     el.srcObject = stream */
-    /*   }).catch(console.error) */
   }
 
   $: (window as any).pc = pc
 </script>
 
 <main>
+  <h1>Peer ID: { uuid }</h1>
   <div id="signalingContainer" style="display: none">
     <h2>Browser base64 Session Description</h2>
     <textarea id="localSessionDescription" readonly></textarea>
@@ -164,13 +148,30 @@
   <h2>Remote Videos</h2>
   <div id="remoteVideos"></div> <br />
 
-  <button class="createSessionButton" on:click={() => ""}> Publish a Broadcast </button>
+  <div class="grid">
+    <div>
+      <h4>Local SDP</h4>
+      <pre>{pc?.localDescription?.sdp}</pre>
+    </div>
+    <div>
+      <h4>Remote SDP</h4>
+      <pre>{pc?.remoteDescription?.sdp}</pre>
+    </div>
+  </div>
 
   <h2>Logs</h2>
   <div id="logs"></div>
 </main>
 
 <style>
+  pre {
+    font-size: .9em;
+  }
+
+  .grid {
+    display: grid;
+  }
+
   h1, h2, h3, h4, h5, h6 {
     line-height: 1.2em;
     font-size: 1.2em;

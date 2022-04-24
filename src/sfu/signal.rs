@@ -1,17 +1,12 @@
 use anyhow::Result;
-use futures::stream::{SplitSink, SplitStream};
 use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::upgrade::Upgraded;
-use hyper::{Body, Method, Request, Response, Server, StatusCode};
+use hyper::{Body, Request, Response, Server};
 use std::net::SocketAddr;
-use std::str::FromStr;
-use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
 use flume::Receiver;
 use flume::Sender;
 use futures::{sink::SinkExt, stream::StreamExt};
-use hyper_tungstenite::{tungstenite, HyperWebsocket, WebSocketStream};
+use hyper_tungstenite::{tungstenite, HyperWebsocket};
 use std::convert::Infallible;
 use tungstenite::Message;
 use uuid::Uuid;
@@ -108,16 +103,15 @@ async fn serve_websocket(
 
     tokio::spawn(async move {
         while let Ok(message) = out_rx.recv_async().await {
-            println!("Trying to send outbound ws message: {:?}", message);
+            // println!("Trying to send outbound ws message: {:?}", message);
             sink.send(Message::text(serde_json::to_string(&message).unwrap())).await.unwrap();
         }
     });
 
     while let Some(message) = stream.next().await {
-        println!("Received incoming ws message: {:?}", message);
+        // println!("Received incoming ws message: {:?}", message);
         match message? {
             Message::Text(msg) => {
-                // println!("Receiving msg: {:?}, for uuid: {:?}", msg, uuid);
                 in_tx.send(serde_json::from_str(&msg).unwrap()).unwrap();
             }
             Message::Close(msg) => {
